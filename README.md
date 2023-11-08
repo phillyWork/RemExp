@@ -352,8 +352,7 @@ struct UserProduct: Codable, Equatable {
 }
 ```
 
-
-
+![firestoreImage](./readMeImage/firestoreImage.png)
 
 -----
 
