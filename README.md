@@ -45,20 +45,275 @@
 Firebase에서 Apple과 Google 계정은 각각 Sign In Apple과 Sign in with Google 기능만 구현해서 유저 확인을 해주면 등록 및 관리 작업은 알아서 해준다.
 하지만 카카오 계정은 해당 기능을 제공하지 않아서 단계별로 접근해서 카카오 유저 이메일을 직접 Firebase에 등록하는 작업까지 구현을 해야 했다.
 
-_카카오 통한 유저 계정 확인 작업_
+```swift
+func kakaoLogin() {
+    // 카카오톡 실행 가능 여부 확인
+    if UserApi.isKakaoTalkLoginAvailable() {
+        //카카오톡으로 로그인하기
+        kakaoLoginInApp()
+    } else {
+        //웹으로 카카오 로그인하기
+        kakaoLoginInWeb()
+    }
+}
 
+private func kakaoLoginInApp() {
+    UserApi.shared.loginWithKakaoTalk() { (oauthToken, error) in
+        if let error = error {
+            print("카카오톡 로그인 에러: \(error.localizedDescription)")
+        } else {
+            print("카카오톡 로그인 성공")
+            guard let token = oauthToken else { return }    
+            self.signUpFirebase(token)
+        }
+    }
+}
 
-계정 확인이 되었다면 내부적으로 직접 FireStore에 해당 이메일과 비밀번호를 등록해서 자동 로그인이 되도록 구성하기 위해 카카오에게서 유저 이메일을 받아왔어야 했다.
+private func kakaoLoginInWeb() {
+    UserApi.shared.loginWithKakaoAccount(prompts: [.Login]) { oauthToken, error in
+        if let error = error {
+            print("카카오 계정 로그인 에러: \(error.localizedDescription)")
+        } else {
+            print("카카오 계정 로그인 성공")    
+            guard let token = oauthToken else { return }    
+            self.signUpFirebase(token)
+        }
+    }
+}
+```
 
+카카오를 통해 계정 확인이 되었다면 내부적으로 직접 FirebaseAuth에 해당 이메일과 비밀번호를 등록해서 자동 로그인이 되도록 구성하기 위해 카카오에게서 유저 이메일을 받아왔어야 했다.
 
+![kakaoEmailApproval](./readMeImage/kakaoEmailApproval.png)
 
+카카오에게서 받고나면 token에서 이메일을 추출해 FirebaseAuth에 등록한다.
 
+```swift
+func signUpFirebase(_ token: OAuthToken) {
+    //파이어베이스 인증 서버에 회원가입 및 로그인을 완료합니다.
+    //로그인 여부를 확인합니다.
+        
+    UserApi.shared.me { user, error in
+        if let error = error {
+            print("사용자 정보 가져오기 에러: \(error.localizedDescription)")
+        } else {
+            print("사용자 정보 가져오기 성공")
+                
+            guard let user = user else { return }
+            guard let kakaoUser = user.kakaoAccount else {
+                print("Can't get kakaoAccount from user")
+                return
+            }
+                
+            let nickName = kakaoUser.profile?.nickname ?? "카카오"
+            guard let email = kakaoUser.email else {
+                print("Can't get email from user data")
+                return
+            } 
+            let password = "\(String(describing: user.id))"
+
+            //FirebaseAuth에 유저 등록
+            Auth.auth().createUser(withEmail: email, password: password) { result, error in
+                //에러 메시지 따라 분기 처리하기
+                if let error = error {
+                    let message = self.handleErrorCodes(error: error as NSError)
+                    if message == "이미 사용 중인 이메일입니다." {
+                        Auth.auth().signIn(withEmail: email, password: password) { result, error in
+                            if let error = error {
+                                print("Error with sign in firebase: \(error.localizedDescription)")
+                                return
+                            }
+                            self.startApp()
+                            return
+                        }
+                    } else {
+                        print("Error with creating user in firebase: \(error.localizedDescription)")
+                        return
+                    }
+                }
+                    
+                guard let result = result else { return }
+                    
+                //get email from token
+                guard let email = result.user.email else { return }
+                //uid
+                let uid = result.user.uid
+
+                //FireStore에 해당 계정 유저 데이터로 등록
+                self.dataManager.queryDuplicateUserData(uid: uid, email: email, nickName: nickName) { result in
+                    switch result {
+                        case true:
+                            let alert = UIAlertController(title: "성공", message: "유저 등록에 성공했습니다.", preferredStyle: .alert)
+                            let action = UIAlertAction(title: "확인", style: .default) { action in
+                                //start the app
+                                self.startApp()
+                            }
+                            alert.addAction(action)
+                            
+                            DispatchQueue.main.async {
+                                self.present(alert, animated: true)
+                            }
+                        case false:
+                            let alert = UIAlertController(title: "실패", message: "유저 등록에 실패했습니다. 다시 시도해주세요.", preferredStyle: .alert)
+                            let action = UIAlertAction(title: "확인", style: .default)
+                            alert.addAction(action)
+                            
+                            DispatchQueue.main.async {
+                                self.present(alert, animated: true)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+```
 
 #### 2. Sign In Apple 구현 시 필요한 난수화
 
-Sign In Apple은 JWT 기반으로 동작하기에 
+Sign In Apple은 토큰 기반으로 유저 확인 작업을 거친다. `ASAuthorizationControllerDelegate`의 `authorizationController` 메서드에서 인증 정보를 전달하기 위해 난수화로 생성한 nonce를 제공해야 한다.
 
+난수화된 nonce를 생성하기 위해선 우선 랜덤으로 뽑힌 String이 필요하다.
 
+```swift
+func randomNonceString(length: Int = 32) -> String {
+    precondition(length > 0)
+    let charset: [Character] = Array("0123456789ABCDEFGHIJKLMNOPQRSTUVXYZabcdefghijklmnopqrstuvwxyz-._")
+    var result = ""
+    var remainingLength = length
+        
+    while remainingLength > 0 {
+        let randoms: [UInt8] = (0..<16).map { _ in
+            var random: UInt8 = 0
+            //암호화된 랜덤 byte 생성
+            let errorCode = SecRandomCopyBytes(kSecRandomDefault, 1, &random)
+            if errorCode != errSecSuccess {
+                fatalError("Unable to generate nonce. SecRandomCopyBytes failed with OSStatus \(errorCode)")
+            }
+            return random
+        }
+
+        //길이가 0이 될때까지 해당 random 결과물에 charsest에서 문자열 추가            
+        randoms.forEach { random in
+            if remainingLength == 0 {
+                return
+            }
+    
+            if random < charset.count {
+                result.append(charset[Int(random)])
+                remainingLength -= 1
+            }
+        }
+    }
+        
+    return result
+}
+```
+
+생성된 임의의 문자열을 sha256 통해 256bit로 구성된 hash값으로 생성한다.
+
+```swift
+func sha256(_ input: String) -> String {
+    let inputData = Data(input.utf8)
+    let hashedData = SHA256.hash(data: inputData)
+    let hashString = hashedData.compactMap {
+        String(format: "%02x", $0)
+    }.joined()
+        
+    return hashString
+}
+```
+
+이를 통해 Apple 계정을 확인한다.
+
+```swift
+ @objc func signUpApple() {
+    let nonce = randomNonceString()
+    currentNonce = nonce
+        
+    let appleIDProvider = ASAuthorizationAppleIDProvider()
+    //request 요청을 했을 때 nonce가 포함되어서 릴레이 공격을 방지
+    //추후 firebase에서도 무결성 확인을 할 수 있음
+    let request = appleIDProvider.createRequest()
+    request.requestedScopes = [.email]
+    request.nonce = sha256(nonce)
+        
+    let authorizationController = ASAuthorizationController(authorizationRequests: [request])
+    authorizationController.delegate = self
+    authorizationController.presentationContextProvider = self
+    authorizationController.performRequests()
+}
+```
+
+해당 hash값을 유저의 identityToken에 활용한다.
+
+```swift
+extension SignUpVC: ASAuthorizationControllerDelegate {    
+    func authorizationController(controller: ASAuthorizationController, didCompleteWithAuthorization authorization: ASAuthorization) {
+        if let appleIDCredential = authorization.credential as? ASAuthorizationAppleIDCredential {
+            //인증 정보를 전달하기 위해 nonce 사용
+            guard let nonce = currentNonce else {
+                fatalError("Invalid state: A login callback was received, but no login request was sent.")
+            }
+            guard let appleIDToken = appleIDCredential.identityToken else {
+                print("Unable to fetch identity token")
+                return
+            }
+            
+            guard let idTokenString = String(data: appleIDToken, encoding: .utf8) else {
+                print("Unable to serialize token string from data: \(appleIDToken.debugDescription)")
+                return
+            }
+            
+            //credential을 구성해서 Auth SignIn 구성 (google과 동일)
+            let credential = OAuthProvider.credential(withProviderID: "apple.com", idToken: idTokenString, rawNonce: nonce)
+
+            // Sign in with Firebase.
+            Auth.auth().signIn(with: credential) { (result, error) in
+                if let error = error {
+                    // Error. If error.code == .MissingOrInvalidNonce, make sure
+                    // you're sending the SHA256-hashed nonce as a hex string with
+                    // your request to Apple.
+                    print ("Error Apple sign in: %@", error.localizedDescription)
+                    return
+                }
+                
+                // User is signed in to Firebase with Apple.
+                guard let result = result else { return }
+                
+                //get email from token
+                guard let email = result.user.email else { return }
+                //uid
+                let uid = result.user.uid
+                let nickName = "애플"
+                
+                self.dataManager.queryDuplicateUserData(uid: uid, email: email, nickName: nickName) { result in
+                    switch result {
+                    case true:
+                        let alert = UIAlertController(title: "성공", message: "유저 등록에 성공했습니다.", preferredStyle: .alert)
+                        let action = UIAlertAction(title: "확인", style: .default) { action in
+                            self.startApp()
+                        }
+                        alert.addAction(action)
+                        
+                        DispatchQueue.main.async {
+                            self.present(alert, animated: true)
+                        }
+                    case false:
+                        let alert = UIAlertController(title: "실패", message: "유저 등록에 실패했습니다. 다시 시도해주세요.", preferredStyle: .alert)
+                        let action = UIAlertAction(title: "확인", style: .default)
+                        alert.addAction(action)
+                        
+                        DispatchQueue.main.async {
+                            self.present(alert, animated: true)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+```
 
 -----
 
@@ -73,9 +328,71 @@ Sign In Apple은 JWT 기반으로 동작하기에
 처음 기획에서는 버튼을 더 제공해서 각각 기능을 부여하려 했지만 부족한 공간에 많은 버튼이 위치하면서 버튼 가독성과 활용성이 떨어지는 피드백을 받을 수 있었다. 
 기획을 수정하여 등록된 제품 아이템들이 나타나는 tableView의 custom leading & trailing swipe action을 구현해서 여러 액션을 같이 제공하면 화면 구성과 더불어 사용성도 높일 수 있었다.
 
+```swift
+//swipe from left to right
+func tableView(_ tableView: UITableView, leadingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {        
+    
+    let action = UIContextualAction(style: .destructive, title: "삭제하기") { action, view, completionHandler in
+        guard let uid = Auth.auth().currentUser?.uid else { return }
 
+        self.dataManager.deleteNotUsedUserProduct(uid: uid, indexPath: indexPath) { didSuccess in
+            switch didSuccess {
+            case true:
+                print("Deletion UserProduct completed!")
+                    
+                //dataManager의 array에서도 삭제
+                self.dataManager.deleteCurrentNotUsedUserProduct(indexPath: indexPath)
+                    
+                //tableView에서 삭제하기
+                tableView.deleteRows(at: [indexPath], with: .fade)
+                    
+                completionHandler(true)
+            case false:
+                print("Deletion UserProduct failed")
 
+                let alert = UIAlertController(title: "등록된 제품 삭제에 실패했습니다.", message: "다시 시도해주세요.", preferredStyle: .alert)
+                let confirm = UIAlertAction(title: "확인", style: .default)
+                alert.addAction(confirm)
+                DispatchQueue.main.async {
+                    self.present(alert, animated: true)
+                }
+                completionHandler(false)
+            }
+        }
+    }
+    return UISwipeActionsConfiguration(actions: [action])
+}
+```
 
+```swift
+//swipe from right to left
+func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath) -> UISwipeActionsConfiguration? {
+    let action = UIContextualAction(style: .normal, title: "사용 완료") { action, view, completionHandler in    
+        //해당 userProduct의 isUsed "true"로 만들기
+        guard let uid = Auth.auth().currentUser?.uid else { return }
+            
+        self.dataManager.confirmUserProduct(uid: uid, indexPath: indexPath) { didSucceed in
+            switch didSucceed {
+                case true:
+                    print("Changing isUsed status succeed")
+                    
+                    //dataManager도 수정: isUsedFalse에서 isUsedTrue로 넘기기
+                    self.dataManager.applyConfirmationUserProduct(indexPath: indexPath)
+                    
+                    //tableView에서 삭제하기
+                    tableView.deleteRows(at: [indexPath], with: .fade)
+
+                    completionHandler(true)
+                case false:
+                    print("Changing isUsed status failed")
+                    completionHandler(false)
+            }
+        }
+    }
+    action.backgroundColor = brandColor
+    return UISwipeActionsConfiguration(actions: [action])
+}
+```
 
 -----
 
