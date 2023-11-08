@@ -319,6 +319,40 @@ extension SignUpVC: ASAuthorizationControllerDelegate {
 
 ### B. DB Table 및 CRUD 설계
 
+유저 정보가 Primary Key로 있다면 등록한 제품 테이블에서 필요한 정보를 바로 접근할 수 있는 장점이 있기에 개인 프로젝트를 진행할 때는 항상 유저 정보와 데이터 테이블을 나눠서 각자 구성을 하는 방식을 선호했다.
+
+하지만 팀원과 같이 DB Table 구성 회의를 하면서 바코드 인식으로 얻어온 상품 정보를 유저 내부에 저장해야 향후 날짜 계산 및 알림 기능을 구현할 때 query를 줄여서 비용 절감 관점에서 인식할 수 있었다.
+
+본인 방식이 빠르게 구현할 수 있는 장점이 있었지만 미래의 확장성과 유지 보수 측면에서 팀원 의견이 더 나았다.
+
+유저 데이터 내부에 UserProduct를 둔 뒤, 내부에 reference 역할을 할 Product를 두어 기본 정보는 Product에서, 유저가 유통기한 설정 및 등록 날짜와 관련해서 추가 정보를 관리하도록 설계했다.
+
+```swift
+//reference 역할의 상품 정보들
+struct Product: Codable {
+    var barcode: String
+    var brandName: String
+    var productName: String
+    var category: String
+    var imageUrl: String
+}
+
+//실제 유저가 등록할 정보들
+struct UserProduct: Codable, Equatable {
+    var uid: String         //UUID (존재여부 확인: eidt, create 구분)
+    var isUsed: Bool        //기간 내 사용여부 판단
+    var createdAt: Date     //등록된 시간
+    var expiresAt: Date       //유저가 직접 설정
+    var product: Product
+    
+    static func == (lhs: UserProduct, rhs: UserProduct) -> Bool {
+        //제품 구분용
+        return lhs.uid == rhs.uid
+    }
+}
+```
+
+
 
 
 -----
