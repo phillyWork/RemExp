@@ -42,7 +42,7 @@
 
 #### 1. Firebase에서 제공하지 않는 카카오 계정 관리 기능
 
-Firebase에서 Apple과 Google 계정은 각각 Sign In Apple과 Sign in with Google 기능만 구현해서 유저 확인을 해주면 등록 및 관리 작업은 알아서 해준다.
+Firebase에서 Apple과 Google 계정은 각각 Sign In Apple과 Sign in with Google 기능만 구현해서 유저 확인을 해주면 등록 및 관리 작업은 시스템에서 내부적으로 처리해준다.
 하지만 카카오 계정은 해당 기능을 제공하지 않아서 단계별로 접근해서 카카오 유저 이메일을 직접 Firebase에 등록하는 작업까지 구현을 해야 했다.
 
 ```swift
@@ -431,8 +431,8 @@ func tableView(_ tableView: UITableView, trailingSwipeActionsConfigurationForRow
 
 # 회고
 
-- 비밀번호 및 난수화에 대한 깊은 이해가 없이 구현을 시도해서 보안 요소에 대한 고려 사항을 많이 신경쓰지 못해 아쉬움이 남는다. 
+- 비밀번호 및 난수화에 대한 깊은 이해가 없이 구현을 시도해서 보안 요소에 대한 고려 사항을 많이 신경쓰지 못해 아쉬움이 남는다. 다음 프로젝트에서 회원 관리와 관련해서 sha256과 관련되어 난수화에 더 학습하고 코드 적용을 해볼 계획이다.
 
-- 매일 자정 혹은 유저가 정한 시간마다 FireStore에서 등록해놓은 item과 남은 날짜 계산을 통해 FCM으로 유저 Notification을 구현하려 했지만 모든 유저가 등록한 아이템 대비 FireStore Read 건수가 금방 소모될 것 같아 구현하지 못한 아쉬움이 있다. 광고 수익이 잘 나오는 서비스였다면 자체 서버 혹은 FireStore 유료 구간을 결제해서 기능 구현을 시도했을 것이다.  
+- 매일 자정 혹은 유저가 정한 시간마다 FireStore에서 등록해놓은 item과 남은 날짜 계산을 통해 FCM으로 유저 Notification을 구현하려 했지만 모든 유저가 등록한 아이템 대비 FireStore Read 건수가 금방 소모될 것 같아 구현하지 못한 아쉬움이 있다. 광고 수익이 잘 나오는 서비스였다면 FireStore 유료 구간을 결제해거나 자체 서버를 구성했더라면 기능 구현을 시도했을 것이다.
 
 - viewWillAppear에서 매번 tableView를 reload하기 보다는 아이템을 새로 등록하거나 삭제했을때만 NotificationCenter를 활용해서 `post`와 `addObserver`로 FireStore에서 read 건수를 줄일 수 있다는 생각이 든다. 이는 다음 업데이트에 시도해볼 예정이다.
